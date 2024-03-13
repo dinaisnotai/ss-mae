@@ -126,9 +126,12 @@ def getData(hsi_path, X_path, gt_path, index_path, keys, channels, windowSize, b
     # PCA is used to reduce the dimensionality of the HSI
     hsi_pca = applyPCA(hsi, channels)
 
+    pretrain_loader = None
+
     # Build Dataset
-    HXpretrainset = HXDataset(hsi, hsi_pca, X, pretrain_index,
-                              windowSize, transform=ToTensor(), train=True)
+    if args.is_pretrain:
+        HXpretrainset = HXDataset(hsi, hsi_pca, X, pretrain_index,
+                                  windowSize, transform=ToTensor(), train=True)
     HXtrainset = HXDataset(hsi, hsi_pca, X, train_index,
                            windowSize, gt, transform=ToTensor(), train=True)
     HXtestset = HXDataset(hsi, hsi_pca, X, test_index,
@@ -139,8 +142,9 @@ def getData(hsi_path, X_path, gt_path, index_path, keys, channels, windowSize, b
                          windowSize, transform=ToTensor())
 
     # Build Dataloader
-    pretrain_loader = DataLoader(
-        HXpretrainset, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True)
+    if args.is_pretrain:
+        pretrain_loader = DataLoader(
+            HXpretrainset, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True)
     train_loader = DataLoader(
         HXtrainset, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True)
     test_loader = DataLoader(
