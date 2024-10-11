@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 
+# 定义一个模块，用于处理lidar的数据
 class lidar_e(nn.Module):
     def __init__(self,args):
         if args.dataset == "Houston2018":

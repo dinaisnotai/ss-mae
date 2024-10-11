@@ -14,7 +14,7 @@ def min_max(x):
     max = np.max(x)
     return (x - min) / (max - min)
 
-
+# 设置生成随机数
 def set_random_seed(seed):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
@@ -24,7 +24,7 @@ def set_random_seed(seed):
     np.random.seed(seed)
     random.seed(seed)
 
-
+# 把三维data降维为二维
 def applyPCA(data, n_components):
     h, w, b = data.shape
     pca = PCA(n_components=n_components)
@@ -34,12 +34,14 @@ def applyPCA(data, n_components):
 
 class HXDataset(Dataset):
 
+    # 初始化HXDataset对象
     def __init__(self, hsi, hsi_pca, X, pos, windowSize, gt=None, transform=None, train=False):
         modes = ['symmetric', 'reflect']
         self.train = train
         self.pad = windowSize // 2
         self.windowSize = windowSize
 
+        # 高光谱、PCA降维后图像，和SAR都被pad处理边界，保证窗口不会超出数组边界
         self.hsi = np.pad(hsi, ((self.pad, self.pad),
                                 (self.pad, self.pad), (0, 0)), mode=modes[windowSize % 2])
         self.hsi_pca = np.pad(hsi_pca, ((self.pad, self.pad),
@@ -60,11 +62,14 @@ class HXDataset(Dataset):
             self.transform = transform
 
     def __getitem__(self, index):
+        # 根据给定的索引和窗口大小，将HSI、hsi_pca和SAR图像在同一位置的数据进行组合
+        # selt.pos[index,;]提供坐标，确保窗口来自同一地理位置（相对坐标）
         h, w = self.pos[index, :]
         hsi = self.hsi[h: h + self.windowSize, w: w + self.windowSize]
         hsi_pca = self.hsi_pca[h: h + self.windowSize, w: w + self.windowSize]
         X = self.X[h: h + self.windowSize, w: w + self.windowSize]
         if self.transform:
+            # 如果true的话，就对三个同时进行变换，用于数据增强
             hsi = self.transform(hsi).float()
             hsi_pca = self.transform(hsi_pca).float()
             X = self.transform(X).float()
@@ -72,6 +77,7 @@ class HXDataset(Dataset):
                      transforms.RandomVerticalFlip(1.)]
             if self.train:
                 if random.random() < 0.5:
+                    # 以50%的概率随机反转
                     i = random.randint(0, 1)
                     hsi = trans[i](hsi)
                     X = trans[i](X)
@@ -98,16 +104,23 @@ def getData(hsi_path, X_path, gt_path, index_path, keys, channels, windowSize, b
 
     '''
 
+    # 高光谱
     hsi = loadmat(hsi_path)[keys[0]]
+    # sar
     X = loadmat(X_path)[keys[1]]
+    # ground truth
     gt = loadmat(gt_path)[keys[2]]
+    # 训练索引
     train_index = loadmat(index_path)[keys[3]]
+    # 测试索引
     test_index = loadmat(index_path)[keys[4]]
+    # 合并上面两个索引
     trntst_index = np.concatenate((train_index, test_index), axis=0)
-
+    # 如果设置了预训练标志 args.is_pretrain，则对全部索引 all_index 进行随机打乱
     all_index = loadmat(index_path)[keys[5]]
     if args.is_pretrain:
         np.random.shuffle(all_index)
+        # 创建预训练索引数组
         pretrain_index = np.zeros((args.pretrain_num, 2), dtype=np.int32)
         count = 0
         for i in all_index:
@@ -119,16 +132,17 @@ def getData(hsi_path, X_path, gt_path, index_path, keys, channels, windowSize, b
                     if count == args.pretrain_num:
                         break
 
+    # 归一化
     X = min_max(X)
     hsi = min_max(hsi)
     print(X.shape)
     print(hsi.shape)
     # PCA is used to reduce the dimensionality of the HSI
-    hsi_pca = applyPCA(hsi, channels)
+    hsi_pca = applyPCA(hsi, channels)   #降维
 
     pretrain_loader = None
 
-    # Build Dataset
+    # Build Dataset 构建数据集
     if args.is_pretrain:
         HXpretrainset = HXDataset(hsi, hsi_pca, X, pretrain_index,
                                   windowSize, transform=ToTensor(), train=True)
@@ -141,7 +155,7 @@ def getData(hsi_path, X_path, gt_path, index_path, keys, channels, windowSize, b
     HXallset = HXDataset(hsi, hsi_pca, X, all_index,
                          windowSize, transform=ToTensor())
 
-    # Build Dataloader
+    # Build Dataloader 创建训练、测试加载器
     if args.is_pretrain:
         pretrain_loader = DataLoader(
             HXpretrainset, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True)
@@ -153,6 +167,7 @@ def getData(hsi_path, X_path, gt_path, index_path, keys, channels, windowSize, b
         HXtrntstset, batch_size=1, shuffle=False, num_workers=num_workers, drop_last=True)
     all_loader = DataLoader(
         HXallset, batch_size=batch_size, shuffle=False, num_workers=num_workers, drop_last=True)
+    # 表示构建数据集成功
     print("Success!")
     return pretrain_loader, train_loader, test_loader, trntst_loader, all_loader
 

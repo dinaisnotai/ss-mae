@@ -112,7 +112,9 @@ def Pretrain(args,
         hsi = hsi[:, 0, :, :, :]
         lidar = lidar.to(device)
 
-        outputs_spa, mask_index_spa, outputs_chan, mask_index_chan = model(torch.cat((hsi, lidar), 1))
+        # 此时已经是双输入（光谱和空间双输入）
+        # 调用mae模型的forward方法
+        outputs_spa, mask_index_spa, outputs_chan, mask_index_chan = model(torch.cat((hsi, lidar), 1))  #torch.cat拼接两个张良
         mask_spa = build_mask_spa(mask_index_spa, args.patch_size, args.crop_size)
         mask_chan = build_mask_chan(mask_index_chan, channel_num=args.channel_num, patch_size=args.patch_size)
         losses = criterion(outputs_spa, torch.cat((hsi, lidar), 1), mask_spa) + criterion(outputs_chan,
@@ -328,6 +330,7 @@ if args.is_pretrain == 1:
         args=args
     )
 else:
+    # 进入微调阶段
     model = MAEFinetune(
         channel_number=args.channel_num,
         img_size=args.crop_size,

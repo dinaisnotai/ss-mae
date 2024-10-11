@@ -1,5 +1,6 @@
 import torch.nn as nn
 
+# 定义一个神经网络，用于处理高光谱图像数据
 class hsi_e(nn.Module):
     def __init__(self, args):
         super(hsi_e, self).__init__()

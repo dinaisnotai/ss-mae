@@ -1,7 +1,7 @@
 import numpy as np
 from sklearn.metrics import confusion_matrix
 
-
+# 计算和返回分类结果指标
 def cal_results(matrix):
     shape = np.shape(matrix)
     number = 0

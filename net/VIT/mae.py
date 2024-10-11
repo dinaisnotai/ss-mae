@@ -152,22 +152,34 @@ class MAEVisionTransformers(nn.Module):
             nn.init.zeros_(module.bias)
             nn.init.ones_(module.weight)
 
+    # 向前传播过程
     def forward(self, x):
         # batch, c, h, w
+        # 编码器encoder，调用autoencoder方法
+        # 输出：norm_embeeding_spa 和 norm_embeeding_chan：空间和光谱的编码嵌入表示
+        # sample_index_spa 和 mask_index_spa：空间遮盖的采样索引和遮盖索引。
+        # sample_index_chan 和 mask_index_chan：光谱遮盖的采样索引和遮盖索引。
         norm_embeeding_spa, sample_index_spa, mask_index_spa,norm_embeeding_chan, \
                         sample_index_chan, mask_index_chan = self.Encoder.autoencoder(x)
+        # 空间和光谱嵌入进行投影
         proj_embeeding_spa = self.proj_spa(norm_embeeding_spa)
         proj_embeeding_chan = self.proj_chan(norm_embeeding_chan)
+        # 解码后空间和光谱嵌入
         decode_embeeding_spa,decode_embeeding_chan = self.Decoder.decoder(proj_embeeding_spa, sample_index_spa,
                                                 mask_index_spa,proj_embeeding_chan,sample_index_chan, mask_index_chan)
+        # 解码后输出
         outputs_spa = self.restruction_spa(decode_embeeding_spa)
         outputs_chan = self.restruction_chan(decode_embeeding_chan)
-        cls_token_spa = outputs_spa[:, 0, :]
-        image_token_spa = outputs_spa[:, 1:, :] # (b, num_patches, patches_vector)
+
+        # 提取cls类别token和img图像token
+        cls_token_spa = outputs_spa[:, 0, :]            #取每一行的第一列
+        image_token_spa = outputs_spa[:, 1:, :]     # (b, num_patches, patches_vector) 从每一行的第二列开始，一直取到最后一列
         # cal the mask patches normalization Independent
+        # 归一化
         image_norm_token_spa = self.patch_norm_spa(image_token_spa)
         n, l, dim = image_norm_token_spa.shape
         image_norm_token_spa = image_norm_token_spa.view(-1, self.num_patch[0], self.num_patch[1], dim).permute(0, 3, 1, 2)
+        # 反卷积，重构图像
         restore_image_spa = self.unconv_spa(image_norm_token_spa)
 
         cls_token_chan = outputs_chan[:, 0, :]

@@ -232,12 +232,13 @@ class VisionTransformer(nn.Module):
             sample_index:   a list of token used for encoder
             mask_index      a list of token mask 
         """
-
+        # 空间和光谱编码
         x_spa = self.patch_embed_spa(x)
         x_chan = self.patch_embed_chan(x)
-        # add cls token for classification
+        # add cls token for classification 添加分类令牌
         dummpy_token_spa = self.cls_token_spa.expand(x_spa.shape[0], -1, -1)
         dummpy_token_chan = self.cls_token_chan.expand(x_chan.shape[0], -1, -1)
+        # 位置编码
         x_spa = torch.cat((dummpy_token_spa, x_spa), dim=1)
         x_chan = torch.cat((dummpy_token_chan, x_chan), dim=1)
         # print(self.pos_embed_spa.device)
@@ -245,12 +246,13 @@ class VisionTransformer(nn.Module):
         x_spa = x_spa + self.pos_embed_spa
         x_chan = x_chan+ self.pos_embed_chan
 
-        # mask the patchemb&posemb
+        # mask the patchemb&posemb 遮盖，比例 self.mask_ratio
         mask_patch_embeeding_spa, sample_index_spa, mask_index_spa = MaskEmbeeding(x_spa, self.mask_ratio)
         mask_patch_embeeding_chan, sample_index_chan, mask_index_chan = MaskEmbeeding(x_chan, self.mask_ratio)
-
+        # 通过编码器块，特征提取
         x_spa = self.blocks_spa(mask_patch_embeeding_spa)
         x_chan = self.blocks_chan(mask_patch_embeeding_chan)
+        # 归一化
         norm_embeeding_spa = self.norm(x_spa)
         norm_embeeding_chan = self.norm(x_chan)
 

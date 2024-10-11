@@ -7,7 +7,7 @@ from torch.cuda.amp import autocast as autocast
 from torchvision.transforms import transforms
 from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 
-
+# 随机选择一部分索引，用来遮
 def ShuffleIndex(index: list, sample_ratio: float):
     sample_list = []
     if len(index) < 4:
@@ -24,10 +24,11 @@ def ShuffleIndex(index: list, sample_ratio: float):
         # assert len(sample_list) == int(len(index) * sample_ratio), "sample length must be same as the ratio!!!"
     return sample_list, mask_list 
 
-
+#图像被分割成多个patch，每个被当作一个token
 def MaskEmbeeding(token_emb, mask_ratio):
     """get the mask embeeding after patch_emb + pos_emb
     """
+    # token_emb 是一个三维的 PyTorch 张量（Tensor），通常用于表示序列数据中embedding
     token_length = token_emb.shape[1]
     token_index = [x for x in range(1, token_length)]
     # print(len(token_index))

@@ -5,7 +5,7 @@ import math
 
 from einops import rearrange, repeat
 
-
+# 在transfromer模型中为输入序列添加位置编码
 class PositionalEncoding(nn.Module):
 
     def __init__(self, d_model, dropout=0.1, max_len=5000):
@@ -24,7 +24,8 @@ class PositionalEncoding(nn.Module):
         x = x + self.pe[:x.size(0), :]
         return self.dropout(x)
 
-
+# 用于分类的神经网络，
+# 接收高光谱（h）和激光雷达（l）数据以及它们的位置编码（h_p, l_p），然后输出分类结果。
 class classify(nn.Module):
     def __init__(self):
         super(classify, self).__init__()
