@@ -31,6 +31,14 @@ def get_dataset(args):
             batch_size=args.batch_size,
             num_workers=0,args=args)
 
+    elif train_dataset == "Tlse":
+        pretrain_loader, train_loader, test_loader, trntst_loader, all_loader = Dataset.getHSData(
+            datasetType="Tlse",
+            channels=args.pca_num,
+            windowSize=args.crop_size,
+            batch_size=args.batch_size,
+            num_workers=0, args=args)
+
     print("completed!")
     
     return pretrain_loader, train_loader, test_loader, trntst_loader, all_loader

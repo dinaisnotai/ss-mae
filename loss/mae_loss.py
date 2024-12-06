@@ -14,6 +14,7 @@ def build_mask_spa(mask_index, patch_size, img_size):
     mask_map = rearrange(mask_map, '(h w) (p1 p2) -> (h p1) (w p2)', h=num_pathces, w=num_pathces, p1=patch_size, p2=patch_size)
     return mask_map
 
+# 根据给定的掩码，构建一个掩码映射
 def build_mask_chan(mask_index, channel_num,patch_size):
     mask_map = torch.zeros((channel_num,1)).float()
     mask_index = [index-1 for index in mask_index ]

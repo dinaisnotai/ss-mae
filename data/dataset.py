@@ -7,6 +7,7 @@ from sklearn.decomposition import PCA
 from torchvision.transforms import ToTensor
 from torchvision import transforms
 from torch.utils.data import DataLoader, Dataset
+import h5py
 
 
 def min_max(x):
@@ -91,6 +92,15 @@ class HXDataset(Dataset):
         return self.pos.shape[0]
 
 
+def load_mat_v73(filename):
+    """Load a specific dataset from a MATLAB v7.3 file using h5py."""
+    key='hyperspectral_image_filtered'
+    with h5py.File(filename, 'r') as f:
+        if key in f:
+            return np.array(f[key])
+        else:
+            raise KeyError(f"Key '{key}' not found in the MATLAB file.")
+
 def getData(hsi_path, X_path, gt_path, index_path, keys, channels, windowSize, batch_size, num_workers, args):
     '''
     hsi: Hyperspectral image data
@@ -104,12 +114,20 @@ def getData(hsi_path, X_path, gt_path, index_path, keys, channels, windowSize, b
 
     '''
 
+
+
+    if(keys==['tlse_hsi', 'tlse_lidar', 'tlse_gt', 'tlse_train', 'tlse_test', 'tlse_all']):
+        hsi=load_mat_v73(hsi_path)
+    else:
+        hsi = loadmat(hsi_path)[keys[0]]
+
     # 高光谱
-    hsi = loadmat(hsi_path)[keys[0]]
+
     # sar
     X = loadmat(X_path)[keys[1]]
     # ground truth
     gt = loadmat(gt_path)[keys[2]]
+
     # 训练索引
     train_index = loadmat(index_path)[keys[3]]
     # 测试索引
@@ -133,8 +151,9 @@ def getData(hsi_path, X_path, gt_path, index_path, keys, channels, windowSize, b
                         break
 
     # 归一化
-    X = min_max(X)
+
     hsi = min_max(hsi)
+    X = min_max(X)
     print(X.shape)
     print(hsi.shape)
     # PCA is used to reduce the dimensionality of the HSI
@@ -198,6 +217,14 @@ def getAugsburgData(hsi_path, sar_path, gt_path, index_path, channels, windowSiz
     return getData(hsi_path, sar_path, gt_path, index_path, augsburg_keys, channels, windowSize, batch_size,
                    num_workers, args)
 
+def getTlseData(hsi_path, lidar_path, gt_path, index_path, channels, windowSize, batch_size, num_workers, args):
+    print("Tlse!")
+    # Houston2018 mat keys
+    Tlse_keys = ['tlse_hsi', 'tlse_lidar', 'tlse_gt', 'tlse_train', 'tlse_test', 'tlse_all']
+
+    return getData(hsi_path, lidar_path, gt_path, index_path, Tlse_keys, channels, windowSize, batch_size,
+                   num_workers, args)
+
 
 def getHSData(datasetType, channels, windowSize, batch_size=64, num_workers=0, args=None):
     if (datasetType == "Berlin"):
@@ -226,5 +253,17 @@ def getHSData(datasetType, channels, windowSize, batch_size=64, num_workers=0, a
                                                                                   index_path,
                                                                                   channels, windowSize, batch_size,
                                                                                   num_workers, args)
+
+    elif (datasetType == "Tlse"):
+        hsi_path = "data/tlse/tlse_hsi.mat"
+        lidar_path = r"D:\dina-zhang\学习\大创\SS-MAE\data\tlse\tlse_lidar.mat"
+        gt_path = "data/tlse/tlse_gt.mat"
+        index_path = "data/tlse/tlse_index.mat"
+        pretrain_loader, train_loader, test_loader, trntst_loader, all_loader = getTlseData(hsi_path, lidar_path,
+                                                                                                   gt_path,
+                                                                                                   index_path,
+                                                                                                   channels, windowSize,
+                                                                                                   batch_size,
+                                                                                                   num_workers, args)
 
     return pretrain_loader, train_loader, test_loader, trntst_loader, all_loader
