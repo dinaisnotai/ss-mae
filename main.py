@@ -7,7 +7,7 @@ import torch.nn as nn
 import numpy as np
 from sklearn.metrics import classification_report
 from utils.optimizer_step import Optimizer
-
+import datetime
 from utility import output_metric
 
 import argparse
@@ -157,8 +157,25 @@ def Train(args,
 
     acc = 0
     n = 0
+
+    # def preprocess_batch(hsi, lidar):
+    #     # 找出HSI和LiDAR中非零的像素位置
+    #     valid_mask = (hsi.sum(dim=1) != 0) & (lidar.sum(dim=1) != 0)
+    #
+    #     # 只保留有效数据
+    #     valid_hsi = hsi[valid_mask]
+    #     valid_lidar = lidar[valid_mask]
+    #     return valid_hsi, valid_lidar
+
+    for batch_idx, batch_data in enumerate(train_loader):
+        print(f"Batch {batch_idx}:")
+        for i, data in enumerate(batch_data):
+            print(f"  Data {i}: Shape={data.shape}, Type={type(data)}")
+        break  # 只打印第一个批次
+
     for batch_idx, (hsi, lidar, tr_labels, hsi_pca) in enumerate(train_loader):
         n = n + 1
+        # hsi, lidar = preprocess_batch(hsi, lidar)
         hsi = hsi.to(device)
         hsi = hsi[:, 0, :, :, :]
         hsi_pca = hsi_pca.to(device)
@@ -315,6 +332,50 @@ def accuracy(output, target, topk=(1,)):
         return res, crr
 
 
+def preprocess_data(hsi_data, lidar_data):
+    """
+    预处理HSI和LiDAR数据,只保留两者都有效的像素点
+    """
+    # 找出HSI和LiDAR中非零的像素位置
+    valid_mask = (hsi_data.sum(axis=-1) != 0) & (lidar_data != 0)
+
+    # 提取有效像素
+    valid_hsi = hsi_data[valid_mask]
+    valid_lidar = lidar_data[valid_mask]
+
+    return valid_hsi, valid_lidar
+
+
+
+def check_valid_patch(hsi_patch, lidar_patch):
+    """检查patch是否有效"""
+    # HSI数据中的无效值(通常为0或NaN)
+    if torch.any(torch.isnan(hsi_patch)) or (hsi_patch == 0).all():
+        return False
+
+    # LiDAR数据中的无效值
+    if torch.isnan(lidar_patch).any() or (lidar_patch == 0).all():
+        return False
+
+    return True
+
+
+# 在数据加载时过滤无效patch
+def get_valid_patch(hsi_data, lidar_data, patch_size):
+    valid_patches = []
+    h, w = hsi_data.shape[:2]
+
+    for i in range(0, h - patch_size + 1):
+        for j in range(0, w - patch_size + 1):
+            hsi_patch = hsi_data[i:i + patch_size, j:j + patch_size]
+            lidar_patch = lidar_data[i:i + patch_size, j:j + patch_size]
+
+            if check_valid_patch(hsi_patch, lidar_patch):
+                valid_patches.append((hsi_patch, lidar_patch))
+
+    return valid_patches
+
+
 if args.is_pretrain == 1:
     model = MAE(
         channel_number=args.channel_num,
@@ -364,49 +425,94 @@ if __name__ == '__main__':
         weight_decay=args.weight_decay,
         finetune=args.finetune
     )
-    scaler = torch.cuda.amp.GradScaler()
+    # scaler = torch.cuda.amp.GradScaler()
+    scaler=torch.amp.GradScaler('cuda')
+
+    # 创建以日期-时间命名的文件夹
+    current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+
+
     if args.is_pretrain == 1:
         criterion = MSELoss(device=device)
         print("Pretraining!!--------")
         min_loss = 1e8
         batch_iter = 0
+
+
+        save_dir = os.path.join('model', 'pretrain',current_time)
+        os.makedirs(save_dir, exist_ok=True)
+
+        # 初始化日志文件
+        log_file = os.path.join(save_dir, 'pretraining_log.txt')
+
+
         for epoch in range(args.epoch):
             model.train()
             n = 0
             loss, batch_iter, scaler = Pretrain(args, scaler, model, criterion, optimizer, epoch, batch_iter,
                                                 args.batch_size)
 
-            if loss < min_loss:
+            # if loss < min_loss:
+            #
+            #     state_dict = translate_state_dict(model.state_dict())
+            #     state_dict = {
+            #         'epoch': epoch,
+            #         'state_dict': state_dict,
+            #         'optimizer': optimizer.state_dict(),
+            #     }
+            #     torch.save(
+            #         state_dict,
+            #         'model/' + 'pretrain_' + args.dataset + '_num' + str(args.pretrain_num) + '_crop_size' + str(
+            #             args.crop_size) + '_mask_ratio_' + str(args.mask_ratio) \
+            #         + '_DDH_' + str(args.depth) + str(args.dim) + str(args.head) + '_epoch_' + str(
+            #             epoch) + '_loss_' + str(loss) + '.pth'
+            #     )
+            #     min_loss = loss
+            with open(log_file, 'a') as f:
+                f.write(f"{args.dataset},Num:{args.pretrain_num},Crop_Size:{args.crop_size},Mask_Ratio:{args.mask_ratio},Epoch: {epoch}, Loss: {loss},  Accuracy: {accuracy}\n")
 
+            if loss < min_loss:
                 state_dict = translate_state_dict(model.state_dict())
                 state_dict = {
                     'epoch': epoch,
                     'state_dict': state_dict,
                     'optimizer': optimizer.state_dict(),
                 }
-                torch.save(
-                    state_dict,
-                    'model/' + 'pretrain_' + args.dataset + '_num' + str(args.pretrain_num) + '_crop_size' + str(
-                        args.crop_size) + '_mask_ratio_' + str(args.mask_ratio) \
-                    + '_DDH_' + str(args.depth) + str(args.dim) + str(args.head) + '_epoch_' + str(
-                        epoch) + '_loss_' + str(loss) + '.pth'
-                )
+                # 保存模型到指定文件夹，并覆盖之前的模型
+                model_path = os.path.join(save_dir, 'best_model.pth')
+                torch.save(state_dict, model_path)
                 min_loss = loss
 
     if args.is_train == 1:
         criterion = nn.CrossEntropyLoss()
         batch_iter = 0
+
+        save_dir = os.path.join('model', 'train', current_time)
+        os.makedirs(save_dir, exist_ok=True)
+
+        # 初始化日志文件
+        log_file = os.path.join(save_dir, 'training_log.txt')
+
+
         for epoch in range(args.epoch):
             model.train()
             n = 0
             loss, batch_iter, scaler = Train(args, scaler, model, criterion, optimizer, epoch, batch_iter,
                                              args.batch_size)
+
+            with open(log_file, 'a') as f:
+                f.write(f"{args.dataset},Num:{args.pretrain_num},Crop_Size:{args.crop_size},Mask_Ratio:{args.mask_ratio},Epoch: {epoch}, Loss: {loss},  Accuracy: {accuracy}\n")
+
+
             if epoch % args.test_interval == 0:
                 # For some datasets (such as Berlin), the test set is too large and the test speed is slow,
                 # so it is recommended to split the validation set with a small sample size
                 model.eval()
                 acc1 = val(args, model)
                 print("epoch:", epoch, "acc:", acc1)
+
                 if acc1 > max_acc:
                     state_dict = translate_state_dict(model.state_dict())
                     state_dict = {
@@ -414,18 +520,17 @@ if __name__ == '__main__':
                         'state_dict': state_dict,
                         'optimizer': optimizer.state_dict(),
                     }
-                    torch.save(state_dict, 'model/' + 'train_' + args.dataset + '_num' + str(
-                        args.pretrain_num) + '_crop_size' + str(args.crop_size) + '_mask_ratio_' + str(args.mask_ratio) \
-                               + '_DDH_' + str(args.depth) + str(args.dim) + str(args.head) + '_epoch_' + str(
-                        epoch) + '_acc_' + str(acc1) + '.pth')
-
+                    # 保存模型到指定文件夹，并覆盖之前的模型
+                    model_path = os.path.join(save_dir, 'best_model.pth')
+                    torch.save(state_dict, model_path)
                     max_acc = acc1
 
     if args.is_test == 1:
-        model_path = 'model/' + 'train_' + args.dataset + '_num' + str(
-                        args.pretrain_num) + '_crop_size' + str(args.crop_size) + '_mask_ratio_' + str(args.mask_ratio) \
-                               + '_DDH_' + str(args.depth) + str(args.dim) + str(args.head) + '_epoch_' + str(
-                        epoch) + '.pth'
+        # model_path = 'model/' + 'train_' + args.dataset + '_num' + str(
+        #                 args.pretrain_num) + '_crop_size' + str(args.crop_size) + '_mask_ratio_' + str(args.mask_ratio) \
+        #                        + '_DDH_' + str(args.depth) + str(args.dim) + str(args.head) + '_epoch_' + str(
+        #                 epoch) + '.pth'
+        model_path=os.path.join(save_dir, 'best_model.pth')
         checkpoint = torch.load(model_path, map_location="cpu")
         model.load_state_dict(checkpoint['state_dict'])
         model.eval()

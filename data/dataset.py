@@ -8,12 +8,23 @@ from torchvision.transforms import ToTensor
 from torchvision import transforms
 from torch.utils.data import DataLoader, Dataset
 import h5py
+from sklearn.decomposition import IncrementalPCA
 
+# def min_max(x):
+#     x = x.astype(np.float32)
+#     min = np.min(x)
+#     max = np.max(x)
+#     return (x - min) / (max - min)
 
 def min_max(x):
-    min = np.min(x)
-    max = np.max(x)
-    return (x - min) / (max - min)
+    result = np.empty_like(x, dtype=np.float32)
+    for i in range(x.shape[0]):  # 逐波段处理
+        band = x[i]
+        min_val = np.min(band)
+        max_val = np.max(band)
+        result[i] = (band - min_val) / (max_val - min_val)
+    return result
+
 
 # 设置生成随机数
 def set_random_seed(seed):
@@ -28,9 +39,11 @@ def set_random_seed(seed):
 # 把三维data降维为二维
 def applyPCA(data, n_components):
     h, w, b = data.shape
+    data = data.astype(np.float32)
     pca = PCA(n_components=n_components)
     data = np.reshape(pca.fit_transform(np.reshape(data, (-1, b))), (h, w, -1))
     return data
+
 
 
 class HXDataset(Dataset):
@@ -41,7 +54,7 @@ class HXDataset(Dataset):
         self.train = train
         self.pad = windowSize // 2
         self.windowSize = windowSize
-
+        # hsi = hsi.astype(np.float32)
         # 高光谱、PCA降维后图像，和SAR都被pad处理边界，保证窗口不会超出数组边界
         self.hsi = np.pad(hsi, ((self.pad, self.pad),
                                 (self.pad, self.pad), (0, 0)), mode=modes[windowSize % 2])
@@ -92,14 +105,136 @@ class HXDataset(Dataset):
         return self.pos.shape[0]
 
 
-def load_mat_v73(filename):
+
+
+def load_hsi_v73(filename):
     """Load a specific dataset from a MATLAB v7.3 file using h5py."""
-    key='hyperspectral_image_filtered'
-    with h5py.File(filename, 'r') as f:
-        if key in f:
-            return np.array(f[key])
-        else:
-            raise KeyError(f"Key '{key}' not found in the MATLAB file.")
+    # key='hyperspectral_image_filtered'
+    # with h5py.File(filename, 'r') as f:
+    #     if key in f:
+    #         return np.array(f[key])
+    #     else:
+    #         raise KeyError(f"Key '{key}' not found in the MATLAB file.")
+    with h5py.File(filename, 'r') as h5_file:
+        hyperspectral_matrix = h5_file['hyperspectral_matrix'][:]  # 读取数据集
+        return np.array(hyperspectral_matrix)
+
+def load_lidar(filename):
+
+    with h5py.File(filename, 'r') as h5_file:
+        hyperspectral_matrix = h5_file['lidar_matrix'][:]  # 读取数据集
+        return np.array(hyperspectral_matrix)
+
+def load_gt(filename):
+    with h5py.File(filename, 'r') as h5_file:
+        hyperspectral_matrix = h5_file['ground_truth'][:]  # 读取数据集
+        return np.array(hyperspectral_matrix)
+
+class CustomDataset(Dataset):
+    def __init__(self, hsi, hsi_pca, lidar, pos, windowSize, labels=None, transform=None, train=False):
+        """
+        初始化数据集，只保留 hsi 和 lidar 中都有有效像素的点，并且这些点的坐标一致。
+
+        参数:
+            hsi (numpy.ndarray 或 torch.Tensor): 高光谱图像数据，形状为 (H, W, C)。
+            lidar (numpy.ndarray 或 torch.Tensor): 激光雷达数据，形状为 (H, W) 或 (H, W, 1)。
+            labels (numpy.ndarray 或 torch.Tensor, 可选): 标签数据，形状为 (H, W)。
+        """
+        # 将输入数据转换为 PyTorch 张量（如果它们不是张量）
+        hsi = torch.from_numpy(hsi) if isinstance(hsi, np.ndarray) else hsi
+        hsi_pca = torch.from_numpy(hsi_pca) if isinstance(hsi_pca, np.ndarray) else hsi_pca
+        lidar = torch.from_numpy(lidar) if isinstance(lidar, np.ndarray) else lidar
+        if labels is not None:
+            labels = torch.from_numpy(labels) if isinstance(labels, np.ndarray) else labels
+
+        # 打印数据形状
+        print("HSI shape:", hsi.shape)
+        print("LiDAR shape:", lidar.shape)
+        if labels is not None:
+            print("Labels shape:", labels.shape)
+            labels = labels.squeeze(0)  # 去掉第一个维度
+            print("Labels shape:", labels.shape)
+            if len(labels.shape) == 3 and labels.shape[0] == 1:
+                labels = labels.squeeze(0)  # 去掉第一个维度
+
+        # 确保 hsi 和 lidar 的形状匹配
+        assert hsi.shape[:2] == lidar.shape[:2], "hsi 和 lidar 的空间维度（高度和宽度）必须相同"
+        assert len(labels.shape) == 2, "labels的维度不为2"
+        # 填充数据以处理边界
+        self.pad = windowSize // 2
+        self.windowSize = windowSize
+        modes = ['symmetric', 'reflect']
+        self.hsi = np.pad(hsi, ((self.pad, self.pad), (self.pad, self.pad), (0, 0)), mode=modes[windowSize % 2])
+        self.hsi_pca = np.pad(hsi_pca, ((self.pad, self.pad), (self.pad, self.pad), (0, 0)), mode=modes[windowSize % 2])
+        if len(lidar.shape) == 2:
+            self.lidar = np.pad(lidar, ((self.pad, self.pad), (self.pad, self.pad)), mode=modes[windowSize % 2])
+        elif len(lidar.shape) == 3:
+            self.lidar = np.pad(lidar, ((self.pad, self.pad), (self.pad, self.pad), (0, 0)), mode=modes[windowSize % 2])
+
+        self.pos = pos
+        self.labels = labels
+        self.transform = transform
+        self.train = train
+
+    def __len__(self):
+        return self.pos.shape[0]
+
+    def __getitem__(self, index):
+        # 根据给定的索引和窗口大小，提取数据
+        if len(self.labels.shape) == 3 and self.labels.shape[0] == 1:
+            print(self.labels.shape,"labels出错")
+            self.labels = self.labels.squeeze(0)  # 去掉第一个维度
+        h, w = self.pos[index, :]
+        # print(f"Index: {index}, h: {h}, w: {w}, gt shape: {self.labels.shape}")
+        hsi = self.hsi[h: h + self.windowSize, w: w + self.windowSize]
+        hsi_pca = self.hsi_pca[h: h + self.windowSize, w: w + self.windowSize]
+        lidar = self.lidar[h: h + self.windowSize, w: w + self.windowSize]
+
+        # 数据增强
+        if self.transform:
+            hsi = self.transform(hsi).float()
+            hsi_pca = self.transform(hsi_pca).float()
+            lidar = self.transform(lidar).float()
+            if self.train:
+                trans = [transforms.RandomHorizontalFlip(1.), transforms.RandomVerticalFlip(1.)]
+                if random.random() < 0.5:
+                    i = random.randint(0, 1)
+                    hsi = trans[i](hsi)
+                    hsi_pca = trans[i](hsi_pca)
+                    lidar = trans[i](lidar)
+
+        # 返回数据
+        if self.labels is not None:
+            gt = torch.tensor(self.labels[h, w] - 1).long()
+            # print(f"Label value: {gt}, min: {self.labels.min()}, max: {self.labels.max()}")
+            return hsi.unsqueeze(0), lidar, gt, hsi_pca.unsqueeze(0)
+        return hsi.unsqueeze(0), lidar, h,w,hsi_pca.unsqueeze(0)
+
+# def custom_collate_fn(batch):
+#     # 将batch中的数据堆叠起来
+#     hsi = torch.stack([item[0] for item in batch])
+#     lidar = torch.stack([item[1] for item in batch])
+#     if len(batch[0]) > 2:
+#         labels = torch.stack([item[2] for item in batch])
+#         return hsi, lidar, labels
+#     return hsi, lidar
+
+def custom_collate_fn(batch):
+    hsi = torch.stack([item[0] for item in batch])
+    lidar = torch.stack([item[1] for item in batch])
+    tr_labels = torch.stack([item[2] for item in batch])
+    hsi_pca = torch.stack([item[3] for item in batch])
+    return hsi, lidar, tr_labels, hsi_pca
+
+
+
+
+
+def load_pca(filename):
+    with h5py.File(filename, 'r') as h5_file:
+        hyperspectral_matrix = h5_file['pca_data'][:]  # 读取数据集
+        return np.array(hyperspectral_matrix)
+
 
 def getData(hsi_path, X_path, gt_path, index_path, keys, channels, windowSize, batch_size, num_workers, args):
     '''
@@ -117,16 +252,20 @@ def getData(hsi_path, X_path, gt_path, index_path, keys, channels, windowSize, b
 
 
     if(keys==['tlse_hsi', 'tlse_lidar', 'tlse_gt', 'tlse_train', 'tlse_test', 'tlse_all']):
-        hsi=load_mat_v73(hsi_path)
+        hsi=load_hsi_v73(hsi_path)
+        X=load_lidar(X_path)
+        gt=load_gt(gt_path)
     else:
         hsi = loadmat(hsi_path)[keys[0]]
+        # sar
+        X = loadmat(X_path)[keys[1]]
+        # ground truth
+        gt = loadmat(gt_path)[keys[2]]
 
-    # 高光谱
 
-    # sar
-    X = loadmat(X_path)[keys[1]]
-    # ground truth
-    gt = loadmat(gt_path)[keys[2]]
+
+
+
 
     # 训练索引
     train_index = loadmat(index_path)[keys[3]]
@@ -152,12 +291,16 @@ def getData(hsi_path, X_path, gt_path, index_path, keys, channels, windowSize, b
 
     # 归一化
 
+    # 高光谱
     hsi = min_max(hsi)
+    hsi = np.transpose(hsi, (1, 2, 0))
     X = min_max(X)
     print(X.shape)
     print(hsi.shape)
+
     # PCA is used to reduce the dimensionality of the HSI
     hsi_pca = applyPCA(hsi, channels)   #降维
+    # hsi_pca=apply_incremental_pca(hsi,channels)
 
     pretrain_loader = None
 
@@ -170,23 +313,45 @@ def getData(hsi_path, X_path, gt_path, index_path, keys, channels, windowSize, b
     HXtestset = HXDataset(hsi, hsi_pca, X, test_index,
                           windowSize, gt, transform=ToTensor())
     HXtrntstset = HXDataset(hsi, hsi_pca, X, trntst_index,
-                            windowSize, transform=ToTensor())
+                            windowSize,gt, transform=ToTensor())
     HXallset = HXDataset(hsi, hsi_pca, X, all_index,
-                         windowSize, transform=ToTensor())
+                         windowSize,gt, transform=ToTensor())
 
     # Build Dataloader 创建训练、测试加载器
     if args.is_pretrain:
         pretrain_loader = DataLoader(
             HXpretrainset, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True)
-    train_loader = DataLoader(
-        HXtrainset, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True)
-    test_loader = DataLoader(
-        HXtestset, batch_size=batch_size, shuffle=False, num_workers=num_workers, drop_last=True)
-    trntst_loader = DataLoader(
-        HXtrntstset, batch_size=1, shuffle=False, num_workers=num_workers, drop_last=True)
-    all_loader = DataLoader(
-        HXallset, batch_size=batch_size, shuffle=False, num_workers=num_workers, drop_last=True)
-    # 表示构建数据集成功
+
+    if(keys==['tlse_hsi', 'tlse_lidar', 'tlse_gt', 'tlse_train', 'tlse_test', 'tlse_all']):
+        train_dataset = CustomDataset(hsi, hsi_pca, X, train_index,
+                           windowSize, gt, transform=ToTensor(), train=True)
+        test_dataset = CustomDataset(hsi, hsi_pca, X, test_index,
+                              windowSize, gt, transform=ToTensor())
+        trntst_dataset = CustomDataset(hsi, hsi_pca, X, trntst_index,
+                                windowSize, gt, transform=ToTensor())
+        all_dataset = CustomDataset(hsi, hsi_pca, X, all_index,
+                             windowSize, gt, transform=ToTensor())
+
+        train_loader = DataLoader(
+            train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True)
+        test_loader = DataLoader(
+            test_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True)
+        trntst_loader = DataLoader(
+            trntst_dataset, batch_size = 1,shuffle = True,num_workers=num_workers,drop_last=True)
+        all_loader = DataLoader(
+            all_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True)
+    else:
+        train_loader = DataLoader(
+            HXtrainset, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True)
+        test_loader = DataLoader(
+            HXtestset, batch_size=batch_size, shuffle=False, num_workers=num_workers, drop_last=True)
+        trntst_loader = DataLoader(
+            HXtrntstset, batch_size=1, shuffle=False, num_workers=num_workers, drop_last=True)
+        all_loader = DataLoader(
+            HXallset, batch_size=batch_size, shuffle=False, num_workers=num_workers, drop_last=True)
+        #
+
+     # 表示构建数据集成功
     print("Success!")
     return pretrain_loader, train_loader, test_loader, trntst_loader, all_loader
 
@@ -255,9 +420,9 @@ def getHSData(datasetType, channels, windowSize, batch_size=64, num_workers=0, a
                                                                                   num_workers, args)
 
     elif (datasetType == "Tlse"):
-        hsi_path = "data/tlse/tlse_hsi.mat"
-        lidar_path = r"D:\dina-zhang\学习\大创\SS-MAE\data\tlse\tlse_lidar.mat"
-        gt_path = "data/tlse/tlse_gt.mat"
+        hsi_path = "data/tlse/processed_hsi.h5"
+        lidar_path = "data/tlse/processed_lidar.h5"
+        gt_path = "data/tlse/processed_gt.h5"
         index_path = "data/tlse/tlse_index.mat"
         pretrain_loader, train_loader, test_loader, trntst_loader, all_loader = getTlseData(hsi_path, lidar_path,
                                                                                                    gt_path,

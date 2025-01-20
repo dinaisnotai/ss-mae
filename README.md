@@ -21,3 +21,35 @@ python main.py  --is_pretrain 0 --is_train 1 --dataset Berlin --num_classes 8 --
 
 
 
+--is_pretrain
+1
+--is_train
+0
+--dataset
+Tlse
+--num_classes
+8
+--pca_num
+30
+--mask_ratio
+0.7
+--pretrain_num
+200000
+--channel_num
+291
+--batch_size
+128
+--device
+cuda:0
+--lr
+0.0001
+--is_load_pretrain
+0
+--depth
+2
+--head
+8
+--dim
+256
+--epoch
+300
