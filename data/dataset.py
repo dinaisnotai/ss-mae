@@ -7,6 +7,9 @@ from sklearn.decomposition import PCA
 from torchvision.transforms import ToTensor
 from torchvision import transforms
 from torch.utils.data import DataLoader, Dataset
+from imblearn.over_sampling import SMOTE
+from sklearn.model_selection import train_test_split
+
 import h5py
 from sklearn.decomposition import IncrementalPCA
 
@@ -147,6 +150,7 @@ class CustomDataset(Dataset):
         if labels is not None:
             labels = torch.from_numpy(labels) if isinstance(labels, np.ndarray) else labels
 
+
         # 打印数据形状
         print("HSI shape:", hsi.shape)
         print("LiDAR shape:", lidar.shape)
@@ -157,6 +161,8 @@ class CustomDataset(Dataset):
             if len(labels.shape) == 3 and labels.shape[0] == 1:
                 labels = labels.squeeze(0)  # 去掉第一个维度
 
+        if len(labels.shape)==1:
+            labels=labels.reshape(-1,1)
         # 确保 hsi 和 lidar 的形状匹配
         assert hsi.shape[:2] == lidar.shape[:2], "hsi 和 lidar 的空间维度（高度和宽度）必须相同"
         assert len(labels.shape) == 2, "labels的维度不为2"
@@ -185,10 +191,18 @@ class CustomDataset(Dataset):
             print(self.labels.shape,"labels出错")
             self.labels = self.labels.squeeze(0)  # 去掉第一个维度
         h, w = self.pos[index, :]
+        h_padded = h + self.pad  # 添加填充偏移
+        w_padded = w + self.pad  # 添加填充偏移
+        if h >= self.labels.shape[0] or w >= self.labels.shape[1]:
+            raise IndexError(f"Index ({h}, {w}) is out of bounds for labels with shape {self.labels.shape}")
         # print(f"Index: {index}, h: {h}, w: {w}, gt shape: {self.labels.shape}")
-        hsi = self.hsi[h: h + self.windowSize, w: w + self.windowSize]
-        hsi_pca = self.hsi_pca[h: h + self.windowSize, w: w + self.windowSize]
-        lidar = self.lidar[h: h + self.windowSize, w: w + self.windowSize]
+        # hsi = self.hsi[h: h + self.windowSize, w: w + self.windowSize]
+        # hsi_pca = self.hsi_pca[h: h + self.windowSize, w: w + self.windowSize]
+        # lidar = self.lidar[h: h + self.windowSize, w: w + self.windowSize]
+
+        hsi = self.hsi[h_padded: h_padded + self.windowSize, w_padded: w_padded + self.windowSize]
+        hsi_pca = self.hsi_pca[h_padded: h_padded + self.windowSize, w_padded: w_padded + self.windowSize]
+        lidar = self.lidar[h_padded: h_padded + self.windowSize, w_padded: w_padded + self.windowSize]
 
         # 数据增强
         if self.transform:
@@ -205,7 +219,9 @@ class CustomDataset(Dataset):
 
         # 返回数据
         if self.labels is not None:
-            gt = torch.tensor(self.labels[h, w] - 1).long()
+            # gt_value = self.labels[h, w]
+            gt = torch.tensor(self.labels[h, w] ).long()
+            # gt = torch.tensor(gt_value - 1 if gt_value > 0 else 0).long()
             # print(f"Label value: {gt}, min: {self.labels.min()}, max: {self.labels.max()}")
             return hsi.unsqueeze(0), lidar, gt, hsi_pca.unsqueeze(0)
         return hsi.unsqueeze(0), lidar, h,w,hsi_pca.unsqueeze(0)
@@ -275,6 +291,7 @@ def getData(hsi_path, X_path, gt_path, index_path, keys, channels, windowSize, b
     trntst_index = np.concatenate((train_index, test_index), axis=0)
     # 如果设置了预训练标志 args.is_pretrain，则对全部索引 all_index 进行随机打乱
     all_index = loadmat(index_path)[keys[5]]
+
     if args.is_pretrain:
         np.random.shuffle(all_index)
         # 创建预训练索引数组
@@ -339,7 +356,8 @@ def getData(hsi_path, X_path, gt_path, index_path, keys, channels, windowSize, b
         trntst_loader = DataLoader(
             trntst_dataset, batch_size = 1,shuffle = True,num_workers=num_workers,drop_last=True)
         all_loader = DataLoader(
-            all_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True)
+            all_dataset, batch_size=batch_size, shuffle=False, num_workers=0, drop_last=False)
+        print(f"all_loader 总样本数: {len(all_loader.dataset)}")
     else:
         train_loader = DataLoader(
             HXtrainset, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True)
@@ -349,6 +367,7 @@ def getData(hsi_path, X_path, gt_path, index_path, keys, channels, windowSize, b
             HXtrntstset, batch_size=1, shuffle=False, num_workers=num_workers, drop_last=True)
         all_loader = DataLoader(
             HXallset, batch_size=batch_size, shuffle=False, num_workers=num_workers, drop_last=True)
+
         #
 
      # 表示构建数据集成功
@@ -432,3 +451,106 @@ def getHSData(datasetType, channels, windowSize, batch_size=64, num_workers=0, a
                                                                                                    num_workers, args)
 
     return pretrain_loader, train_loader, test_loader, trntst_loader, all_loader
+
+def getTlseSmoteData(hsi_path, X_path, gt_path, index_path, channels, windowSize, batch_size, num_workers, args):
+    '''
+    hsi: Hyperspectral image data
+    X: Other modal data
+    gt: Ground truth labels, where 0 represents unlabeled
+    train_index: Indices for training data
+    test_index: Indices for testing data
+    pretrain_index: Indices for pretraining data
+    trntst_index: Indices for training and testing data, used for visualizing labeled data
+    all_index: Indices for all data, including unlabeled data, used for visualizing all data or pretraining
+    '''
+
+    # if keys == ['tlse_hsi', 'tlse_lidar', 'tlse_gt', 'tlse_train', 'tlse_test', 'tlse_all']:
+    #
+    # else:
+    #     hsi = loadmat(hsi_path)[keys[0]]
+    #     X = loadmat(X_path)[keys[1]]
+    #     gt = loadmat(gt_path)[keys[2]]
+
+    hsi = load_hsi_v73(hsi_path)
+    X = load_lidar(X_path)
+    gt = load_gt(gt_path)
+
+    Tlse_keys = ['tlse_hsi', 'tlse_lidar', 'tlse_gt', 'tlse_train', 'tlse_test', 'tlse_all']
+    train_index = loadmat(index_path)[Tlse_keys[3]]
+    test_index = loadmat(index_path)[Tlse_keys[4]]
+    trntst_index = np.concatenate((train_index, test_index), axis=0)
+    all_index = loadmat(index_path)[Tlse_keys[5]]
+
+    if args.is_pretrain:
+        np.random.shuffle(all_index)
+        pretrain_index = np.zeros((args.pretrain_num, 2), dtype=np.int32)
+        count = 0
+        for i in all_index:
+            if 15 < i[0] < hsi.shape[0] - 15:
+                if 15 < i[1] < hsi.shape[1] - 15:
+                    pretrain_index[count] = i
+                    count += 1
+                    if count == args.pretrain_num:
+                        break
+
+    hsi = min_max(hsi)
+    hsi = np.transpose(hsi, (1, 2, 0))
+    lidar = min_max(X)
+
+    # PCA降维
+    hsi_pca = applyPCA(hsi, channels)
+
+    # 提取训练数据的特征和标签
+    hsi_features = []
+    lidar_features = []
+    labels = []
+    gt=gt.squeeze(0)
+
+    for idx in train_index:
+        h, w = idx
+        hsi_feature = hsi[h:h + windowSize, w:w + windowSize].flatten()
+        lidar_feature = lidar[h:h + windowSize, w:w + windowSize].flatten()
+        # print(gt.shape)
+        label = gt[h, w]
+        hsi_features.append(hsi_feature)
+        lidar_features.append(lidar_feature)
+        labels.append(label)
+
+    hsi_features = np.array(hsi_features)
+    lidar_features = np.array(lidar_features)
+    labels = np.array(labels).reshape(-1, 1)
+    print(labels.shape)
+
+    # 合并HSI和LiDAR特征
+    features = np.concatenate([hsi_features, lidar_features], axis=1)
+
+    # 应用SMOTE
+    smote = SMOTE(random_state=42)
+    features_resampled, labels_resampled = smote.fit_resample(features, labels)
+
+    # 将SMOTE后的数据重新分割为HSI和LiDAR
+    hsi_resampled = features_resampled[:, :hsi_features.shape[1]].reshape(-1, windowSize, windowSize, hsi.shape[2])
+    lidar_resampled = features_resampled[:, hsi_features.shape[1]:].reshape(-1, windowSize, windowSize)
+
+    # 创建新的训练索引
+    new_train_index = np.array([[i, j] for i in range(hsi_resampled.shape[0]) for j in range(hsi_resampled.shape[1])])
+
+    # 创建新的训练数据集
+    train_dataset = CustomDataset(hsi_resampled, hsi_pca, lidar_resampled, new_train_index, windowSize,
+                                  labels_resampled, transform=ToTensor(), train=True)
+    test_dataset = CustomDataset(hsi, hsi_pca, lidar, test_index, windowSize, gt, transform=ToTensor())
+    trntst_dataset = CustomDataset(hsi, hsi_pca, lidar, trntst_index, windowSize, gt, transform=ToTensor())
+    all_dataset = CustomDataset(hsi, hsi_pca, lidar, all_index, windowSize, gt, transform=ToTensor())
+
+    # 创建DataLoader
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers,
+                              drop_last=True)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers,
+                             drop_last=True)
+    trntst_loader = DataLoader(trntst_dataset, batch_size=1, shuffle=False, num_workers=num_workers, drop_last=True)
+    all_loader = DataLoader(all_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, drop_last=True)
+
+    print("Success! SMOTE applied to Tlse dataset.")
+    pretrain_loader = None
+
+    return pretrain_loader,train_loader, test_loader, trntst_loader, all_loader

@@ -5,20 +5,21 @@ import os
 import torch
 import torch.nn as nn
 import numpy as np
-from sklearn.metrics import classification_report
+from sklearn.metrics import classification_report, confusion_matrix
 from utils.optimizer_step import Optimizer
 import datetime
 from utility import output_metric
-
+from collections import defaultdict
 import argparse
-
+from collections import Counter
+from visual_gt import visualize_predictions
 parser = argparse.ArgumentParser("HSI")
 
 # ---- stage
 parser.add_argument('--is_train', default=0, type=int)
 parser.add_argument('--is_load_pretrain', default=0, type=int)
 parser.add_argument('--is_pretrain', default=1, type=int)
-parser.add_argument('--is_test', default=0, type=int)
+parser.add_argument('--is_test', default=1, type=int)
 parser.add_argument('--model_file', default='model', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
 
@@ -49,7 +50,7 @@ parser.add_argument('--dim', default=256, type=int)
 # ---- train
 parser.add_argument('--model_name', type=str)
 parser.add_argument('--warmup_epochs', default=5, type=int)
-parser.add_argument('--test_interval', default=5, type=int)
+parser.add_argument('--test_interval', default=2, type=int)
 parser.add_argument('--optimizer_name', default="adamw", type=str)
 parser.add_argument('--lr', default=1e-4, type=float)
 parser.add_argument('--cosine', default=0, type=int)
@@ -142,6 +143,20 @@ def Pretrain(args,
     )
     return total_loss / n, batch_iter, scaler
 
+class_weights = {
+    0: 0.0190,
+    1: 0.3027,
+    2: 0.0017,
+    3: 0.0322,
+    4: 0.0237,
+    5: 0.0046,
+    6: 0.0430,
+    7: 0.8151,
+    8: 2.0531,
+    9: 2.090,
+    10: 2.6914,
+    11: 0.0104
+}
 
 def Train(args,
           scaler,
@@ -157,15 +172,20 @@ def Train(args,
 
     acc = 0
     n = 0
+    class_counts = defaultdict(int)
 
-    # def preprocess_batch(hsi, lidar):
-    #     # 找出HSI和LiDAR中非零的像素位置
-    #     valid_mask = (hsi.sum(dim=1) != 0) & (lidar.sum(dim=1) != 0)
-    #
-    #     # 只保留有效数据
-    #     valid_hsi = hsi[valid_mask]
-    #     valid_lidar = lidar[valid_mask]
-    #     return valid_hsi, valid_lidar
+    def custom_loss(output, target):
+        # 忽略类别为0的样本
+        mask = target != 0
+        loss = nn.CrossEntropyLoss()(output[mask], target[mask])
+        return loss
+
+
+    # 假设有效像素坐标存储在数据集中
+
+    # 计算 unique_classes
+    labels = train_loader.dataset.labels
+    unique_classes = np.unique(labels[labels > 0])
 
     for batch_idx, batch_data in enumerate(train_loader):
         print(f"Batch {batch_idx}:")
@@ -174,6 +194,9 @@ def Train(args,
         break  # 只打印第一个批次
 
     for batch_idx, (hsi, lidar, tr_labels, hsi_pca) in enumerate(train_loader):
+        labels = tr_labels.numpy()
+        for label in labels:
+            class_counts[label] += 1
         n = n + 1
         # hsi, lidar = preprocess_batch(hsi, lidar)
         hsi = hsi.to(device)
@@ -195,7 +218,11 @@ def Train(args,
             # forward
 
         outputs, _ = model(hsi, lidar, hsi_pca)
-        losses = criterion(outputs, tr_labels)
+
+
+        # 在训练过程中使用自定义损失函数
+        losses = custom_loss(outputs, tr_labels)
+        # losses = criterion(outputs, tr_labels)
 
         optimizer.zero_grad()
 
@@ -214,8 +241,22 @@ def Train(args,
             " batch_idx:", batch_idx,
             " batch_iter:", batch_iter,
             " batch_acc:", batch_acc[0],
+            "loss:",losses.data.item(),
             " lr:", lr
         )
+
+    print("训练集类别分布:")
+    for cls in sorted(class_counts.keys()):
+        print(f"类别 {cls}: {class_counts[cls]} 个样本")
+
+    # 检查是否存在样本数为 0 的类别
+
+    missing_classes = [cls for cls in unique_classes if class_counts.get(cls, 0) == 0]
+    if missing_classes:
+        print(f"警告：以下类别在训练集中没有样本: {missing_classes}")
+    else:
+        print("训练集包含所有类别！")
+
     print(
         "Epoch:", epoch,
         " acc:", acc / n,
@@ -241,7 +282,10 @@ def val(
             hsi_pca = hsi_pca.to(device)
             tr_labels = tr_labels.to(device)
 
-            outputs, _ = model(hsi, lidar, hsi_pca)
+            if args.is_pretrain == True:
+                outputs,_=model(hsi)
+            else:
+                outputs, _ = model(hsi, lidar, hsi_pca)
 
             batch_accuracy, _ = accuracy(outputs, tr_labels)
 
@@ -256,6 +300,8 @@ def val(
                 gty = np.concatenate((gty, tr_labels.detach().cpu().numpy()))
 
     OA2, AA_mean2, Kappa2, AA2 = output_metric(gty, y_pred_test)
+    print("val_pred_unique",np.unique(y_pred_test))
+    print("val_label_unique", np.unique(gty))
     classification = classification_report(gty, y_pred_test, digits=4)
     print(classification)
     print("OA2=", OA2)
@@ -265,6 +311,11 @@ def val(
     epoch_acc = np.mean(batch_acc_list)
 
     print("Epoch_mean_accuracy:" % epoch_acc)
+
+    cm = confusion_matrix(gty, y_pred_test)
+    print("Confusion Matrix:")
+    print(cm)
+
 
     return epoch_acc
 
@@ -486,6 +537,19 @@ if __name__ == '__main__':
                 min_loss = loss
 
     if args.is_train == 1:
+
+        if args.is_load_pretrain==1:
+            pretrain_model_path = 'model/train/20250225_223832/best_model.pth'  # 替换为你的预训练模型路径
+            checkpoint = torch.load(pretrain_model_path, map_location="cpu")
+            model.load_state_dict(checkpoint['state_dict'])
+            print(f"Loaded pretrained model from {pretrain_model_path}")
+
+        weights = torch.tensor(list(class_weights.values()), dtype=torch.float32)
+
+        # 将权重移动到 GPU（如果使用 GPU）
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        weights = weights.to(device)
+        # criterion = nn.CrossEntropyLoss(weight=weights)
         criterion = nn.CrossEntropyLoss()
         batch_iter = 0
 
@@ -501,6 +565,25 @@ if __name__ == '__main__':
             n = 0
             loss, batch_iter, scaler = Train(args, scaler, model, criterion, optimizer, epoch, batch_iter,
                                              args.batch_size)
+
+            # print(f"all_loader samples: {len(all_loader.dataset)}")
+            # print(f"test_loader samples: {len(test_loader.dataset)}")
+            # all_labels = [label for _, _, label, _ in all_loader.dataset]
+            # print("all_loader labels distribution:", Counter(all_labels))
+            #
+            # # 检查 test_loader 的标签分布
+            # test_labels = [label for _, _, label, _ in test_loader.dataset]
+            # print("test_loader labels distribution:", Counter(test_labels))
+            #
+            #
+            # all_batch = next(iter(all_loader))
+            # test_batch = next(iter(test_loader))
+            #
+            # print("all_loader first batch:", all_batch)
+            # print("test_loader first batch:", test_batch)
+
+
+
 
             with open(log_file, 'a') as f:
                 f.write(f"{args.dataset},Num:{args.pretrain_num},Crop_Size:{args.crop_size},Mask_Ratio:{args.mask_ratio},Epoch: {epoch}, Loss: {loss},  Accuracy: {accuracy}\n")
@@ -535,3 +618,7 @@ if __name__ == '__main__':
         model.load_state_dict(checkpoint['state_dict'])
         model.eval()
         acc1 = val(args, model)
+
+        gt_path = "data/tlse/processed_gt.h5"
+
+        visualize_predictions(args, model, all_loader,gt_path)
