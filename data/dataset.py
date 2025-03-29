@@ -144,6 +144,7 @@ class CustomDataset(Dataset):
             labels (numpy.ndarray 或 torch.Tensor, 可选): 标签数据，形状为 (H, W)。
         """
         # 将输入数据转换为 PyTorch 张量（如果它们不是张量）
+        print(hsi.shape)
         hsi = torch.from_numpy(hsi) if isinstance(hsi, np.ndarray) else hsi
         hsi_pca = torch.from_numpy(hsi_pca) if isinstance(hsi_pca, np.ndarray) else hsi_pca
         lidar = torch.from_numpy(lidar) if isinstance(lidar, np.ndarray) else lidar
@@ -182,6 +183,8 @@ class CustomDataset(Dataset):
         self.transform = transform
         self.train = train
 
+
+
     def __len__(self):
         return self.pos.shape[0]
 
@@ -190,19 +193,34 @@ class CustomDataset(Dataset):
         if len(self.labels.shape) == 3 and self.labels.shape[0] == 1:
             print(self.labels.shape,"labels出错")
             self.labels = self.labels.squeeze(0)  # 去掉第一个维度
+
         h, w = self.pos[index, :]
         h_padded = h + self.pad  # 添加填充偏移
         w_padded = w + self.pad  # 添加填充偏移
         if h >= self.labels.shape[0] or w >= self.labels.shape[1]:
             raise IndexError(f"Index ({h}, {w}) is out of bounds for labels with shape {self.labels.shape}")
-        # print(f"Index: {index}, h: {h}, w: {w}, gt shape: {self.labels.shape}")
-        # hsi = self.hsi[h: h + self.windowSize, w: w + self.windowSize]
-        # hsi_pca = self.hsi_pca[h: h + self.windowSize, w: w + self.windowSize]
-        # lidar = self.lidar[h: h + self.windowSize, w: w + self.windowSize]
+
+            # 边界检查
+        # if (h_padded + self.windowSize > self.hsi.shape[0] or
+        #         w_padded + self.windowSize > self.hsi.shape[1]):
+        #     # print(f'{h},{w} 导致越界')
+
 
         hsi = self.hsi[h_padded: h_padded + self.windowSize, w_padded: w_padded + self.windowSize]
         hsi_pca = self.hsi_pca[h_padded: h_padded + self.windowSize, w_padded: w_padded + self.windowSize]
         lidar = self.lidar[h_padded: h_padded + self.windowSize, w_padded: w_padded + self.windowSize]
+
+        # 如果窗口尺寸不足，强制填充到目标尺寸
+        if hsi.shape[0] != self.windowSize or hsi.shape[1] != self.windowSize:
+            hsi = np.pad(hsi, ((0, self.windowSize - hsi.shape[0]),
+                               (0, self.windowSize - hsi.shape[1]),
+                               (0, 0)), mode='constant')
+            hsi_pca = np.pad(hsi_pca, ((0, self.windowSize - hsi_pca.shape[0]),
+                                       (0, self.windowSize - hsi_pca.shape[1]),
+                                       (0, 0)), mode='constant')
+            lidar = np.pad(lidar, ((0, self.windowSize - lidar.shape[0]),
+                                   (0, self.windowSize - lidar.shape[1])), mode='constant')
+
 
         # 数据增强
         if self.transform:
@@ -224,6 +242,8 @@ class CustomDataset(Dataset):
             # gt = torch.tensor(gt_value - 1 if gt_value > 0 else 0).long()
             # print(f"Label value: {gt}, min: {self.labels.min()}, max: {self.labels.max()}")
             return hsi.unsqueeze(0), lidar, gt, hsi_pca.unsqueeze(0)
+
+
         return hsi.unsqueeze(0), lidar, h,w,hsi_pca.unsqueeze(0)
 
 # def custom_collate_fn(batch):
@@ -292,6 +312,8 @@ def getData(hsi_path, X_path, gt_path, index_path, keys, channels, windowSize, b
     # 如果设置了预训练标志 args.is_pretrain，则对全部索引 all_index 进行随机打乱
     all_index = loadmat(index_path)[keys[5]]
 
+    print('all_index',all_index.shape)
+
     if args.is_pretrain:
         np.random.shuffle(all_index)
         # 创建预训练索引数组
@@ -356,7 +378,7 @@ def getData(hsi_path, X_path, gt_path, index_path, keys, channels, windowSize, b
         trntst_loader = DataLoader(
             trntst_dataset, batch_size = 1,shuffle = True,num_workers=num_workers,drop_last=True)
         all_loader = DataLoader(
-            all_dataset, batch_size=batch_size, shuffle=False, num_workers=0, drop_last=False)
+            all_dataset, batch_size=batch_size, shuffle=False, num_workers=0, drop_last=True)
         print(f"all_loader 总样本数: {len(all_loader.dataset)}")
     else:
         train_loader = DataLoader(
@@ -464,22 +486,20 @@ def getTlseSmoteData(hsi_path, X_path, gt_path, index_path, channels, windowSize
     all_index: Indices for all data, including unlabeled data, used for visualizing all data or pretraining
     '''
 
-    # if keys == ['tlse_hsi', 'tlse_lidar', 'tlse_gt', 'tlse_train', 'tlse_test', 'tlse_all']:
-    #
-    # else:
-    #     hsi = loadmat(hsi_path)[keys[0]]
-    #     X = loadmat(X_path)[keys[1]]
-    #     gt = loadmat(gt_path)[keys[2]]
-
     hsi = load_hsi_v73(hsi_path)
     X = load_lidar(X_path)
     gt = load_gt(gt_path)
 
     Tlse_keys = ['tlse_hsi', 'tlse_lidar', 'tlse_gt', 'tlse_train', 'tlse_test', 'tlse_all']
+
+
+
     train_index = loadmat(index_path)[Tlse_keys[3]]
     test_index = loadmat(index_path)[Tlse_keys[4]]
     trntst_index = np.concatenate((train_index, test_index), axis=0)
     all_index = loadmat(index_path)[Tlse_keys[5]]
+
+    print('Tlse Smote!')
 
     if args.is_pretrain:
         np.random.shuffle(all_index)
@@ -497,43 +517,69 @@ def getTlseSmoteData(hsi_path, X_path, gt_path, index_path, channels, windowSize
     hsi = np.transpose(hsi, (1, 2, 0))
     lidar = min_max(X)
 
+    print(X.shape)
+    print(hsi.shape)
+
+
+
     # PCA降维
     hsi_pca = applyPCA(hsi, channels)
 
     # 提取训练数据的特征和标签
     hsi_features = []
     lidar_features = []
-    labels = []
-    gt=gt.squeeze(0)
+    gt = gt.squeeze(0)
+
+    # 初始化一个全为 0 的二维数组，形状和 gt 相同
+    labels = np.zeros_like(gt)
+    labels_flat=[]
 
     for idx in train_index:
         h, w = idx
-        hsi_feature = hsi[h:h + windowSize, w:w + windowSize].flatten()
-        lidar_feature = lidar[h:h + windowSize, w:w + windowSize].flatten()
-        # print(gt.shape)
-        label = gt[h, w]
-        hsi_features.append(hsi_feature)
-        lidar_features.append(lidar_feature)
-        labels.append(label)
+        # 检查当前位置是否有有效的标签
+        if gt[h, w] != 0:  # 假设 0 表示无标签
+            hsi_feature = hsi[h:h + windowSize, w:w + windowSize].flatten()
+            lidar_feature = lidar[h:h + windowSize, w:w + windowSize].flatten()
+            label = gt[h, w]
+
+            hsi_features.append(hsi_feature)
+            lidar_features.append(lidar_feature)
+            # 在 labels 二维数组的对应位置填充标签值
+            labels[h, w] = label
+
+            labels_flat.append(label)
 
     hsi_features = np.array(hsi_features)
     lidar_features = np.array(lidar_features)
-    labels = np.array(labels).reshape(-1, 1)
+    labels_flat= np.array(labels_flat).reshape(-1, 1)
     print(labels.shape)
+    print('labels_flat shape',labels_flat.shape)  # 输出应该是和 gt 相同的形状
 
     # 合并HSI和LiDAR特征
     features = np.concatenate([hsi_features, lidar_features], axis=1)
 
     # 应用SMOTE
     smote = SMOTE(random_state=42)
-    features_resampled, labels_resampled = smote.fit_resample(features, labels)
-
+    features_resampled, labels_resampled = smote.fit_resample(features, labels_flat)
     # 将SMOTE后的数据重新分割为HSI和LiDAR
     hsi_resampled = features_resampled[:, :hsi_features.shape[1]].reshape(-1, windowSize, windowSize, hsi.shape[2])
     lidar_resampled = features_resampled[:, hsi_features.shape[1]:].reshape(-1, windowSize, windowSize)
 
-    # 创建新的训练索引
-    new_train_index = np.array([[i, j] for i in range(hsi_resampled.shape[0]) for j in range(hsi_resampled.shape[1])])
+    # 为新生成的数据重新分配坐标
+    original_coords_set = set(map(tuple, train_index))  # 存储原始坐标的集合
+    new_train_index = []
+    for _ in range(hsi_resampled.shape[0]):
+        while True:
+            # 随机生成一个新坐标
+            h = np.random.randint(0, hsi.shape[0] - windowSize)
+            w = np.random.randint(0, hsi.shape[1] - windowSize)
+            new_coord = (h, w)
+            if new_coord not in original_coords_set:
+                original_coords_set.add(new_coord)
+                new_train_index.append(new_coord)
+                break
+
+    new_train_index = np.array(new_train_index)
 
     # 创建新的训练数据集
     train_dataset = CustomDataset(hsi_resampled, hsi_pca, lidar_resampled, new_train_index, windowSize,
@@ -553,4 +599,4 @@ def getTlseSmoteData(hsi_path, X_path, gt_path, index_path, channels, windowSize
     print("Success! SMOTE applied to Tlse dataset.")
     pretrain_loader = None
 
-    return pretrain_loader,train_loader, test_loader, trntst_loader, all_loader
+    return pretrain_loader, train_loader, test_loader, trntst_loader, all_loader

@@ -12,65 +12,68 @@ from scipy.io import loadmat
 import h5py
 
 
-def visualize_predictions(args, model, all_loader):
-    """
-    对所有点进行预测并可视化结果
-    """
-    model.eval()  # 将模型设置为评估模式
-    predictions = []  # 存储预测结果
-    if torch.cuda.is_available():
-        device = torch.device("cuda")  # 如果可用，使用CUDA
-    else:
-        device = torch.device("cpu")
+def visualize_predictions(args, model, all_loader, gt_path):
 
-
-    with torch.no_grad():
-        for batch_idx, (hsi, lidar, labels, hsi_pca) in enumerate(all_loader):
-            hsi = hsi.to(device)
-            hsi = hsi[:, 0, :, :, :]  # 调整维度
-            hsi_pca = hsi_pca.to(device)
-            lidar = lidar.to(device)
-
-            # 进行预测
-            outputs, _ = model(hsi, lidar, hsi_pca)
-            preds = torch.argmax(outputs, dim=1).cpu().numpy()  # 获取预测类别
-            predictions.extend(preds)
-            print("pred",np.unique(preds))
-            print("accuracy",accuracy_score(preds, labels))
-
-    # 将预测结果转换为图像格式
-    predictions = np.array(predictions)
-    print("Length of predictions:", len(labels))
-
-    # 获取原始数据的形状（假设数据是二维的）
-    hsi_path = "data/tlse/processed_hsi.h5"  # 替换为你的数据路径
-    with h5py.File(hsi_path, 'r') as h5_file:
-        hsi_data = h5_file['hyperspectral_matrix'][:]
-    bands,height, width = hsi_data.shape
-    print("hsi_data shape:", hsi_data.shape)
-
-    # 将预测结果重塑为原始图像形状
-    pred_image = np.zeros((height, width), dtype=np.uint8)
-
-    # 填充预测结果
-    all_index = loadmat("data/tlse/tlse_index.mat")['tlse_all']  # 替换为你的索引路径
-
-    print("all_index shape:", all_index.shape)
-    print("First 10 indices:", all_index[:10])
-
-    for idx, (h, w) in enumerate(all_index):
-        if h < height and w < width:  # 检查索引是否在范围内
-            pred_image[h, w] = predictions[idx] + 1  # 类别从0开始，+1是为了与真实标签对齐
+        """
+        对所有点进行预测并可视化结果
+        """
+        model.eval()  # 将模型设置为评估模式
+        predictions = []  # 存储预测结果
+        if torch.cuda.is_available():
+            device = torch.device("cuda")  # 如果可用，使用CUDA
         else:
-            print(f"Index ({h}, {w}) is out of bounds for pred_image with shape ({height}, {width})")
+            device = torch.device("cpu")
 
-    # 可视化预测结果
-    plt.figure(figsize=(12, 6))
-    plt.imshow(pred_image, cmap='jet')
-    plt.title("Predicted Labels")
-    plt.colorbar()
-    plt.tight_layout()
-    plt.show()
+        # visual.py 中的 visualize_predictions 函数
+        for batch_idx, (hsi, lidar, labels, hsi_pca) in enumerate(all_loader):
+            print(f"Batch {batch_idx} - HSI shape: {hsi.shape}, LiDAR shape: {lidar.shape}")
+            break  # 仅检查第一个批次
+
+
+        with torch.no_grad():
+            for batch_idx, (hsi, lidar, labels, hsi_pca) in enumerate(all_loader):
+                hsi = hsi.to(device)
+                hsi = hsi[:, 0, :, :, :]  # 调整维度
+                hsi_pca = hsi_pca.to(device)
+                lidar = lidar.to(device)
+
+                # 进行预测
+                outputs, _ = model(hsi, lidar, hsi_pca)
+                preds = torch.argmax(outputs, dim=1).cpu().numpy()  # 获取预测类别
+                predictions.extend(preds)
+
+        # 将预测结果转换为图像格式
+        predictions = np.array(predictions)
+
+        # 获取原始数据的形状（假设数据是二维的）
+        hsi_path = "data/tlse/processed_hsi.h5"  # 替换为你的数据路径
+        with h5py.File(hsi_path, 'r') as h5_file:
+            hsi_data = h5_file['hyperspectral_matrix'][:]
+        bands, height, width = hsi_data.shape
+
+        # 创建一个全零的预测图像
+        pred_image = np.zeros((height, width), dtype=np.uint8)
+
+        # 获取整个图像的坐标
+
+        # all_indices = np.array([[h, w] for h in range(height) for w in range(width)])
+
+        all_index = loadmat("data/tlse/tlse_index.mat")['tlse_all']
+
+        # 修改循环方式，直接使用索引顺序填充
+
+        for idx, (h, w) in enumerate(all_index):
+            pred_image[h, w] = predictions[idx] + 1  # 假设需要+1对齐标签 # 预测类别+1对齐
+
+
+        # 可视化预测结果
+        plt.figure(figsize=(12, 6))
+        plt.imshow(pred_image, cmap='jet')
+        plt.title("Predicted Labels")
+        plt.colorbar()
+        plt.tight_layout()
+        plt.show()
+        plt.savefig('pic.png')
 
 
 # 在主函数中调用可视化函数

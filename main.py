@@ -13,6 +13,8 @@ from collections import defaultdict
 import argparse
 from collections import Counter
 from visual_gt import visualize_predictions
+
+
 parser = argparse.ArgumentParser("HSI")
 
 # ---- stage
@@ -621,4 +623,6 @@ if __name__ == '__main__':
 
         gt_path = "data/tlse/processed_gt.h5"
 
+
+        # print(all_loader.shape())
         visualize_predictions(args, model, all_loader,gt_path)
